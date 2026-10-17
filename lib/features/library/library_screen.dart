@@ -177,9 +177,11 @@ class _LikedTab extends ConsumerWidget {
                   onTap: () => ref.read(playerProvider.notifier).playTracks(tracks, i, source: 'Lagu yang disukai'),
                   trailing: IconButton(
                     tooltip: 'Hapus dari disukai',
-                    onPressed: () {
-                      ref.read(likesProvider.notifier).toggle(t);
-                      showToast(context, 'Dihapus dari lagu yang disukai');
+                    onPressed: () async {
+                      final ok = await ref.read(likesProvider.notifier).toggle(t);
+                      if (context.mounted) {
+                        showToast(context, ok ? 'Dihapus dari lagu yang disukai' : 'Gagal, periksa koneksi', error: !ok);
+                      }
                     },
                     icon: const Icon(Icons.favorite_rounded, size: 20, color: AppColors.accent),
                   ),

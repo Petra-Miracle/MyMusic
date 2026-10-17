@@ -1,7 +1,10 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:just_audio/just_audio.dart' as ja;
+import 'package:just_audio_background/just_audio_background.dart';
 
 import '../../data/models/models.dart';
 import '../../data/providers.dart';
@@ -18,6 +21,7 @@ class PlayerState {
     this.source = '',
     this.status = PlaybackStatus.idle,
     this.position = Duration.zero,
+    this.audioDuration,
     this.shuffle = false,
     this.repeat = RepeatSetting.off,
   });
@@ -34,11 +38,14 @@ class PlayerState {
   final String source;
   final PlaybackStatus status;
   final Duration position;
+
+  /// Durasi asli audio (bisa beda beberapa detik dari durasi video YouTube).
+  final Duration? audioDuration;
   final bool shuffle;
   final RepeatSetting repeat;
 
   bool get isPlaying => status == PlaybackStatus.playing;
-  Duration get duration => current?.duration ?? Duration.zero;
+  Duration get duration => audioDuration ?? current?.duration ?? Duration.zero;
   double get progress =>
       duration.inMilliseconds == 0 ? 0 : (position.inMilliseconds / duration.inMilliseconds).clamp(0, 1);
 
@@ -49,6 +56,8 @@ class PlayerState {
     String? source,
     PlaybackStatus? status,
     Duration? position,
+    Duration? audioDuration,
+    bool clearAudioDuration = false,
     bool? shuffle,
     RepeatSetting? repeat,
   }) =>
@@ -59,6 +68,7 @@ class PlayerState {
         source: source ?? this.source,
         status: status ?? this.status,
         position: position ?? this.position,
+        audioDuration: clearAudioDuration ? null : (audioDuration ?? this.audioDuration),
         shuffle: shuffle ?? this.shuffle,
         repeat: repeat ?? this.repeat,
       );
@@ -66,19 +76,61 @@ class PlayerState {
 
 final playerProvider = NotifierProvider<PlayerController, PlayerState>(PlayerController.new);
 
-/// Pemutar musik.
-///
-/// TAHAP UI: playback disimulasikan dengan timer. Nanti `_load` diganti
-/// `MusicRepository.streamUrl` + `just_audio`, dan `_tick` diganti stream
-/// posisi dari `AudioPlayer`. API publik controller ini tidak berubah.
+/// Pemutar musik: antrean dikelola di sini, audio diputar `just_audio`
+/// (dengan kontrol di notifikasi & lock screen lewat `just_audio_background`).
 class PlayerController extends Notifier<PlayerState> {
-  Timer? _ticker;
+  final _player = ja.AudioPlayer();
+  final _subs = <StreamSubscription<Object?>>[];
   var _loadId = 0;
+  var _autoRetried = false;
 
   @override
   PlayerState build() {
-    ref.onDispose(() => _ticker?.cancel());
+    _subs
+      ..add(_player.positionStream.listen((p) {
+        if (state.current != null) state = state.copyWith(position: p);
+      }))
+      ..add(_player.durationStream.listen((d) {
+        if (d != null) state = state.copyWith(audioDuration: d);
+      }))
+      ..add(_player.playerStateStream.listen(_onPlayerState, onError: _onPlaybackError));
+    ref.onDispose(() {
+      for (final s in _subs) {
+        s.cancel();
+      }
+      _player.dispose();
+    });
     return const PlayerState();
+  }
+
+  void _onPlayerState(ja.PlayerState s) {
+    if (state.current == null || state.status == PlaybackStatus.error) return;
+    switch (s.processingState) {
+      case ja.ProcessingState.loading || ja.ProcessingState.buffering:
+        state = state.copyWith(status: PlaybackStatus.buffering);
+      case ja.ProcessingState.ready:
+        _autoRetried = false;
+        state = state.copyWith(status: s.playing ? PlaybackStatus.playing : PlaybackStatus.paused);
+      case ja.ProcessingState.completed:
+        if (state.repeat == RepeatSetting.one) {
+          _player.seek(Duration.zero);
+        } else {
+          next();
+        }
+      case ja.ProcessingState.idle:
+        break;
+    }
+  }
+
+  void _onPlaybackError(Object error, StackTrace _) {
+    debugPrint('Playback error: $error');
+    // URL stream YouTube kedaluwarsa setelah beberapa jam: ambil ulang sekali secara otomatis.
+    if (!_autoRetried && state.current != null) {
+      _autoRetried = true;
+      retry();
+      return;
+    }
+    state = state.copyWith(status: PlaybackStatus.error);
   }
 
   /// Putar [tracks] mulai dari [index]. Sisa daftar masuk antrean.
@@ -92,12 +144,30 @@ class PlayerController extends Notifier<PlayerState> {
     _load(tracks[index]);
   }
 
+  /// Putar satu lagu (mis. dari hasil pencarian); antrean diisi lagu serupa bila autoplay aktif.
+  void playSingle(Track track, {required String source}) {
+    state = state.copyWith(played: const [], upNext: const [], source: source);
+    _load(track);
+    if (ref.read(settingsProvider).autoplay) unawaited(_fillQueueWithRelated(track));
+  }
+
+  Future<void> _fillQueueWithRelated(Track seed) async {
+    try {
+      final related = await ref.read(musicRepositoryProvider).related(seed);
+      // Abaikan bila user sudah pindah lagu atau mengisi antrean sendiri.
+      if (state.current != seed || state.upNext.isNotEmpty) return;
+      state = state.copyWith(upNext: related);
+    } catch (e) {
+      debugPrint('Gagal mengisi antrean: $e');
+    }
+  }
+
   void togglePlay() {
     switch (state.status) {
       case PlaybackStatus.playing:
-        state = state.copyWith(status: PlaybackStatus.paused);
+        _player.pause();
       case PlaybackStatus.paused:
-        state = state.copyWith(status: PlaybackStatus.playing);
+        _player.play();
       case PlaybackStatus.error:
         retry();
       case PlaybackStatus.idle || PlaybackStatus.buffering:
@@ -105,9 +175,10 @@ class PlayerController extends Notifier<PlayerState> {
     }
   }
 
+  /// Muat ulang lagu saat ini (URL baru) dan lanjutkan dari posisi terakhir.
   void retry() {
     final t = state.current;
-    if (t != null) _load(t);
+    if (t != null) _load(t, startAt: state.position, recordHistory: false);
   }
 
   void next() {
@@ -121,7 +192,8 @@ class PlayerController extends Notifier<PlayerState> {
       } else if (ref.read(settingsProvider).autoplay) {
         _autoplayFrom(current);
       } else {
-        state = state.copyWith(status: PlaybackStatus.paused, position: Duration.zero);
+        _player.pause();
+        _player.seek(Duration.zero);
       }
       return;
     }
@@ -143,7 +215,10 @@ class PlayerController extends Notifier<PlayerState> {
     _load(prev);
   }
 
-  void seek(Duration position) => state = state.copyWith(position: position);
+  void seek(Duration position) {
+    state = state.copyWith(position: position);
+    _player.seek(position);
+  }
 
   void toggleShuffle() {
     final on = !state.shuffle;
@@ -179,40 +254,63 @@ class PlayerController extends Notifier<PlayerState> {
     state = state.copyWith(upNext: list);
   }
 
-  Future<void> _autoplayFrom(Track seed) async {
-    final related = await ref.read(musicRepositoryProvider).related(seed);
-    final fresh = related.where((t) => t != seed && !state.played.contains(t)).toList();
-    if (fresh.isEmpty) return;
-    state = state.copyWith(played: [...state.played, seed], upNext: fresh.sublist(1), source: 'Autoplay');
-    _load(fresh.first);
+  /// Hentikan pemutaran & kosongkan antrean (dipakai saat logout).
+  Future<void> stop() async {
+    _loadId++;
+    await _player.stop();
+    state = const PlayerState();
   }
 
-  Future<void> _load(Track track) async {
-    final id = ++_loadId;
-    _ticker?.cancel();
-    state = state.copyWith(current: track, status: PlaybackStatus.buffering, position: Duration.zero);
+  Future<void> _autoplayFrom(Track seed) async {
     try {
-      await ref.read(musicRepositoryProvider).streamUrl(track.videoId);
-      await Future.delayed(const Duration(milliseconds: 700));
-      if (id != _loadId) return;
-      state = state.copyWith(status: PlaybackStatus.playing);
-      _ticker = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
-      // → POST /history (backend). Fire-and-forget, tidak mengganggu pemutaran.
-      unawaited(ref.read(libraryRepositoryProvider).addHistory(track).then((_) => ref.invalidate(historyProvider)));
-    } catch (_) {
-      if (id == _loadId) state = state.copyWith(status: PlaybackStatus.error);
+      final related = await ref.read(musicRepositoryProvider).related(seed);
+      final fresh = related.where((t) => t != seed && !state.played.contains(t)).toList();
+      if (fresh.isEmpty) return;
+      state = state.copyWith(played: [...state.played, seed], upNext: fresh.sublist(1), source: 'Autoplay');
+      _load(fresh.first);
+    } catch (e) {
+      debugPrint('Autoplay gagal: $e');
     }
   }
 
-  void _tick() {
-    if (state.status != PlaybackStatus.playing) return;
-    final pos = state.position + const Duration(seconds: 1);
-    if (pos < state.duration) {
-      state = state.copyWith(position: pos);
-    } else if (state.repeat == RepeatSetting.one) {
-      state = state.copyWith(position: Duration.zero);
-    } else {
-      next();
+  Future<void> _load(Track track, {Duration startAt = Duration.zero, bool recordHistory = true}) async {
+    final id = ++_loadId;
+    state = state.copyWith(
+      current: track,
+      status: PlaybackStatus.buffering,
+      position: startAt,
+      clearAudioDuration: startAt == Duration.zero,
+    );
+    try {
+      final quality = ref.read(settingsProvider).quality;
+      final url = await ref.read(musicRepositoryProvider).streamUrl(track.videoId, quality: quality);
+      if (id != _loadId) return;
+      await _player.setAudioSource(
+        ja.AudioSource.uri(
+          url,
+          tag: MediaItem(
+            id: track.videoId,
+            title: track.title,
+            artist: track.artist,
+            duration: track.duration,
+            artUri: track.thumbnail == null ? null : Uri.parse(track.thumbnail!),
+          ),
+        ),
+        initialPosition: startAt,
+      );
+      if (id != _loadId) return;
+      unawaited(_player.play());
+      if (recordHistory) {
+        // → POST /history (backend). Gagal pun tidak mengganggu pemutaran.
+        unawaited(ref
+            .read(libraryRepositoryProvider)
+            .addHistory(track)
+            .then((_) => ref.invalidate(historyProvider))
+            .catchError((Object e) => debugPrint('Gagal mencatat riwayat: $e')));
+      }
+    } catch (e) {
+      debugPrint('Gagal memuat ${track.videoId}: $e');
+      if (id == _loadId) state = state.copyWith(status: PlaybackStatus.error);
     }
   }
 }

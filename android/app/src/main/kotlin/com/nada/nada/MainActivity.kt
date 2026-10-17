@@ -1,5 +1,6 @@
 package com.nada.nada
 
-import io.flutter.embedding.android.FlutterActivity
+import com.ryanheise.audioservice.AudioServiceActivity
 
-class MainActivity : FlutterActivity()
+// AudioServiceActivity: diperlukan just_audio_background agar musik tetap jalan di background.
+class MainActivity : AudioServiceActivity()

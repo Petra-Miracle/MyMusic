@@ -8,9 +8,8 @@ import '../models/models.dart';
 /// - **Client-side** (langsung dari HP, tanpa backend): search & stream YouTube,
 ///   lirik dari LRCLIB, pengaturan lokal.
 ///
-/// Saat ini semua diisi oleh implementasi mock di `data/mock/`. Saat backend siap,
-/// cukup buat implementasi `Api*Repository` lalu ganti provider-nya di
-/// `data/providers.dart` — layar & komponen tidak perlu diubah.
+/// Implementasi: `data/api/` (backend), `data/youtube/`, `data/lyrics/`, dan `data/mock/`
+/// (data contoh, aktif dengan `--dart-define=USE_MOCK=true`). Dipilih di `data/providers.dart`.
 ///
 /// Peta lengkap layar → endpoint ada di `docs/API_CONTRACT.md`.
 
@@ -76,8 +75,8 @@ abstract interface class MusicRepository {
   /// Lagu serupa untuk "Pilihan cepat untukmu" & autoplay.
   Future<List<Track>> related(Track seed);
 
-  /// URL audio (m4a) untuk diputar `just_audio`.
-  Future<Uri> streamUrl(String videoId);
+  /// URL audio (m4a) untuk diputar `just_audio`. Berlaku ±6 jam.
+  Future<Uri> streamUrl(String videoId, {AudioQuality quality = AudioQuality.normal});
 }
 
 /// Client-side: LRCLIB (gratis, tanpa API key).

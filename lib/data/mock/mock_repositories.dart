@@ -157,7 +157,9 @@ class MockMusicRepository implements MusicRepository {
   }
 
   @override
-  Future<Uri> streamUrl(String videoId) async => Uri.parse('mock://$videoId');
+  Future<Uri> streamUrl(String videoId, {AudioQuality quality = AudioQuality.normal}) async =>
+      // Audio contoh bebas royalti, supaya mode mock tetap bisa diputar.
+      Uri.parse('https://www.soundhelix.com/examples/mp3/SoundHelix-Song-${(videoId.hashCode % 16).abs() + 1}.mp3');
 }
 
 class MockLyricsRepository implements LyricsRepository {

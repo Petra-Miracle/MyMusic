@@ -76,10 +76,15 @@ class _TrackOptionsSheet extends ConsumerWidget {
       _Option(
         LucideIcons.heart,
         liked ? 'Hapus dari disukai' : 'Suka',
-        () {
-          ref.read(likesProvider.notifier).toggle(track);
+        () async {
           close();
-          showToast(rootContext, liked ? 'Dihapus dari lagu yang disukai' : 'Ditambahkan ke lagu yang disukai');
+          final ok = await ref.read(likesProvider.notifier).toggle(track);
+          if (!rootContext.mounted) return;
+          showToast(
+            rootContext,
+            !ok ? 'Gagal, periksa koneksi' : (liked ? 'Dihapus dari lagu yang disukai' : 'Ditambahkan ke lagu yang disukai'),
+            error: !ok,
+          );
         },
         color: liked ? AppColors.accent : null,
       ),
@@ -136,12 +141,14 @@ class _AddToPlaylistSheet extends ConsumerWidget {
 
     Future<void> toggle(Playlist p) async {
       final notifier = ref.read(playlistsProvider.notifier);
-      if (p.tracks.contains(track)) {
-        await notifier.remove(p.id, track.videoId);
-        if (rootContext.mounted) showToast(rootContext, 'Dihapus dari playlist ${p.name}');
-      } else {
-        await notifier.add(p.id, track);
-        if (rootContext.mounted) showToast(rootContext, 'Ditambahkan ke playlist ${p.name}');
+      final inPlaylist = p.tracks.contains(track);
+      try {
+        inPlaylist ? await notifier.remove(p.id, track.videoId) : await notifier.add(p.id, track);
+        if (rootContext.mounted) {
+          showToast(rootContext, inPlaylist ? 'Dihapus dari playlist ${p.name}' : 'Ditambahkan ke playlist ${p.name}');
+        }
+      } catch (e) {
+        if (rootContext.mounted) showToast(rootContext, '$e', error: true);
       }
     }
 
@@ -257,8 +264,15 @@ class _CreatePlaylistSheetState extends ConsumerState<_CreatePlaylistSheet> {
     setState(() => _saving = true);
     final rootContext = Navigator.of(context, rootNavigator: true).context;
     final notifier = ref.read(playlistsProvider.notifier);
-    final p = await notifier.create(name);
-    if (widget.withTrack != null) await notifier.add(p.id, widget.withTrack!);
+    final Playlist p;
+    try {
+      p = await notifier.create(name);
+      if (widget.withTrack != null) await notifier.add(p.id, widget.withTrack!);
+    } catch (e) {
+      if (mounted) setState(() => _saving = false);
+      if (rootContext.mounted) showToast(rootContext, '$e', error: true);
+      return;
+    }
     if (!mounted) return;
     Navigator.of(context).pop(p);
     if (rootContext.mounted) showToast(rootContext, widget.withTrack != null ? 'Ditambahkan ke playlist $name' : 'Playlist $name dibuat');

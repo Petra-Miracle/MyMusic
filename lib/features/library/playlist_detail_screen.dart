@@ -136,7 +136,12 @@ void _showPlaylistMenu(BuildContext context, WidgetRef ref, Playlist p) {
         Navigator.pop(sheet);
         final ok = await _confirmDelete(context, p);
         if (ok != true || !context.mounted) return;
-        await ref.read(playlistsProvider.notifier).delete(p.id);
+        try {
+          await ref.read(playlistsProvider.notifier).delete(p.id);
+        } catch (e) {
+          if (context.mounted) showToast(context, '$e', error: true);
+          return;
+        }
         if (!context.mounted) return;
         context.go('/library');
         showToast(context, 'Playlist ${p.name} dihapus');
@@ -164,8 +169,12 @@ void _rename(BuildContext context, WidgetRef ref, Playlist p) {
     Future<void> save() async {
       final name = controller.text.trim();
       if (name.isEmpty) return;
-      await ref.read(playlistsProvider.notifier).rename(p.id, name);
-      if (sheet.mounted) Navigator.pop(sheet);
+      try {
+        await ref.read(playlistsProvider.notifier).rename(p.id, name);
+        if (sheet.mounted) Navigator.pop(sheet);
+      } catch (e) {
+        if (context.mounted) showToast(context, '$e', error: true);
+      }
     }
 
     return Padding(

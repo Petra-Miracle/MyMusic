@@ -13,6 +13,7 @@ import '../../core/widgets/feedback.dart';
 import '../../core/widgets/inputs.dart';
 import '../../data/models/models.dart';
 import '../../data/providers.dart';
+import '../player/player_controller.dart';
 
 /// L — Profil & Pengaturan.
 ///
@@ -35,6 +36,8 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     try {
       final code = await ref.read(authRepositoryProvider).createInviteCode();
       if (mounted) setState(() => _invite = code);
+    } catch (e) {
+      if (mounted) showToast(context, '$e', error: true);
     } finally {
       if (mounted) setState(() => _creatingInvite = false);
     }
@@ -137,7 +140,10 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                 child: GhostButton(
                   label: 'Keluar',
                   color: AppColors.error,
-                  onPressed: () => ref.read(authProvider.notifier).logout(),
+                  onPressed: () async {
+                    await ref.read(playerProvider.notifier).stop();
+                    await ref.read(authProvider.notifier).logout();
+                  },
                 ),
               ),
             ]),

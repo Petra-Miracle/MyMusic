@@ -217,8 +217,8 @@ class _Results extends ConsumerWidget {
         const SizedBox(height: 28),
       ],
       const SectionTitle('Lagu'),
-      for (final (i, t) in tracks.indexed)
-        TrackTile(track: t, onTap: () => player.playTracks(tracks, i, source: 'Hasil pencarian')),
+      for (final t in tracks)
+        TrackTile(track: t, onTap: () => player.playSingle(t, source: 'Hasil pencarian')),
     ]);
   }
 }

@@ -1,6 +1,7 @@
 # Kontrak API — Nada
 
-Acuan untuk membangun backend di `D:\Spotify-Bajakan-Backend` (Express + Prisma + Neon, deploy Vercel).
+Backend: `D:\Spotify-Bajakan-Backend` (Express + Prisma + Neon, deploy Vercel) — **sudah diimplementasikan**
+dan diuji (`npm test`, 24 test).
 Semua method di sini sudah dipanggil oleh UI lewat interface di
 `lib/data/repositories/repositories.dart`; sekarang diisi data mock (`lib/data/mock/`).
 Saat backend siap, cukup buat `Api*Repository` lalu ganti 4 baris provider di `lib/data/providers.dart`.
@@ -9,7 +10,8 @@ Saat backend siap, cukup buat `Api*Repository` lalu ganti 4 baris provider di `l
 
 - Base URL: `https://<nama-proyek>.vercel.app/api`
 - Format: JSON. Waktu dalam ISO 8601 (`2026-10-17T21:42:00.000Z`).
-- Auth: header `Authorization: Bearer <token>` untuk semua endpoint **kecuali** `/auth/login` & `/auth/register`.
+- Username: 3–30 karakter `a-z 0-9 . _` (disimpan huruf kecil; login tidak peka huruf besar). Password 6–72 karakter.
+- Auth: header `Authorization: Bearer <token>` (berlaku 90 hari) untuk semua endpoint **kecuali** `/auth/login` & `/auth/register`.
 - Error: status 4xx/5xx dengan body `{ "error": "Pesan yang bisa langsung ditampilkan ke user" }`.
   Aplikasi menampilkan `error` apa adanya (mis. di bawah form login).
 
@@ -39,9 +41,9 @@ Saat backend siap, cukup buat `Api*Repository` lalu ganti 4 baris provider di `l
 | Method | Path | Body | Response |
 |---|---|---|---|
 | POST | `/auth/login` | `{ username, password }` | `{ token, user }` · 401 `Username atau password salah` |
-| POST | `/auth/register` | `{ inviteCode, username, password }` | `{ token, user }` · 400 `Kode undangan tidak valid atau sudah dipakai` · 409 `Username sudah dipakai` |
+| POST | `/auth/register` | `{ inviteCode, username, password }` | 201 `{ token, user }` · 400 `Kode undangan tidak valid atau sudah dipakai` · 409 `Username sudah dipakai` |
 | GET | `/auth/me` | – | `{ user }` · 401 bila token tidak valid |
-| POST | `/invites` | – | `{ code }` (format `NADA-XXXXX`) |
+| POST | `/invites` | – | 201 `{ code }` (format `NADA-XXXXX`) · 429 bila masih punya 5 kode belum terpakai |
 
 ### Playlist
 
@@ -49,7 +51,7 @@ Saat backend siap, cukup buat `Api*Repository` lalu ganti 4 baris provider di `l
 |---|---|---|---|
 | GET | `/playlists` | – | `Playlist[]` (terbaru dulu) |
 | GET | `/playlists/:id` | – | `Playlist` · 404 |
-| POST | `/playlists` | `{ name }` | `Playlist` (tracks kosong) |
+| POST | `/playlists` | `{ name }` (1–100 karakter) | 201 `Playlist` (tracks kosong) |
 | PATCH | `/playlists/:id` | `{ name }` | `Playlist` |
 | DELETE | `/playlists/:id` | – | 204 |
 | POST | `/playlists/:id/tracks` | `{ track: Track }` | 204 (abaikan bila sudah ada) |

@@ -1,17 +1,41 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import '../app/config.dart';
+import 'api/api_client.dart';
+import 'api/api_repositories.dart';
+import 'lyrics/lrclib_lyrics_repository.dart';
 import 'mock/mock_repositories.dart';
 import 'models/models.dart';
 import 'repositories/repositories.dart';
+import 'youtube/youtube_music_repository.dart';
 
 // ---------------------------------------------------------------------------
-// Repository — ganti Mock* dengan Api* saat backend siap.
+// Repository — data asli, atau data contoh bila `--dart-define=USE_MOCK=true`.
 // ---------------------------------------------------------------------------
 
-final authRepositoryProvider = Provider<AuthRepository>((ref) => MockAuthRepository());
-final libraryRepositoryProvider = Provider<LibraryRepository>((ref) => MockLibraryRepository());
-final musicRepositoryProvider = Provider<MusicRepository>((ref) => MockMusicRepository());
-final lyricsRepositoryProvider = Provider<LyricsRepository>((ref) => MockLyricsRepository());
+/// Diisi di `main()` lewat override (dibaca sekali saat aplikasi mulai).
+final sharedPrefsProvider = Provider<SharedPreferences>((ref) => throw UnimplementedError());
+
+final apiClientProvider = Provider<ApiClient>(
+  (ref) => ApiClient(baseUrl: AppConfig.apiBaseUrl, tokens: SecureTokenStore()),
+);
+
+final authRepositoryProvider = Provider<AuthRepository>(
+  (ref) => AppConfig.useMock ? MockAuthRepository() : ApiAuthRepository(ref.watch(apiClientProvider)),
+);
+final libraryRepositoryProvider = Provider<LibraryRepository>(
+  (ref) => AppConfig.useMock ? MockLibraryRepository() : ApiLibraryRepository(ref.watch(apiClientProvider)),
+);
+final musicRepositoryProvider = Provider<MusicRepository>((ref) {
+  if (AppConfig.useMock) return MockMusicRepository();
+  final repo = YoutubeMusicRepository();
+  ref.onDispose(repo.dispose);
+  return repo;
+});
+final lyricsRepositoryProvider = Provider<LyricsRepository>(
+  (ref) => AppConfig.useMock ? MockLyricsRepository() : LrclibLyricsRepository(),
+);
 
 // ---------------------------------------------------------------------------
 // Auth
@@ -40,6 +64,9 @@ class AuthNotifier extends AsyncNotifier<AppUser?> {
   }
 }
 
+/// ID user yang sedang login (null = belum login). Data koleksi bergantung pada ini.
+final _userIdProvider = Provider<String?>((ref) => ref.watch(authProvider).value?.id);
+
 // ---------------------------------------------------------------------------
 // Koleksi (backend)
 // ---------------------------------------------------------------------------
@@ -50,7 +77,11 @@ class PlaylistsNotifier extends AsyncNotifier<List<Playlist>> {
   LibraryRepository get _repo => ref.read(libraryRepositoryProvider);
 
   @override
-  Future<List<Playlist>> build() => _repo.getPlaylists();
+  Future<List<Playlist>> build() async {
+    // Muat ulang saat ganti akun / logout.
+    if (ref.watch(_userIdProvider) == null) return const [];
+    return _repo.getPlaylists();
+  }
 
   Future<void> _reload() async => state = AsyncData(await _repo.getPlaylists());
 
@@ -93,26 +124,33 @@ class LikesNotifier extends AsyncNotifier<List<Track>> {
   LibraryRepository get _repo => ref.read(libraryRepositoryProvider);
 
   @override
-  Future<List<Track>> build() => _repo.getLikes();
+  Future<List<Track>> build() async {
+    if (ref.watch(_userIdProvider) == null) return const [];
+    return _repo.getLikes();
+  }
 
   bool isLiked(Track t) => state.value?.contains(t) ?? false;
 
   /// Optimistic update: UI langsung berubah, request menyusul.
-  Future<void> toggle(Track t) async {
-    final current = state.value ?? const <Track>[];
-    if (current.contains(t)) {
-      state = AsyncData(current.where((x) => x != t).toList());
-      await _repo.unlike(t.videoId);
-    } else {
-      state = AsyncData([t, ...current]);
-      await _repo.like(t);
+  /// Bila request gagal, tampilan dikembalikan dan hasilnya `false`.
+  Future<bool> toggle(Track t) async {
+    final before = state.value ?? const <Track>[];
+    final liked = before.contains(t);
+    state = AsyncData(liked ? before.where((x) => x != t).toList() : [t, ...before]);
+    try {
+      liked ? await _repo.unlike(t.videoId) : await _repo.like(t);
+      return true;
+    } catch (_) {
+      state = AsyncData(before);
+      return false;
     }
   }
 }
 
-final historyProvider = FutureProvider<List<HistoryEntry>>(
-  (ref) => ref.read(libraryRepositoryProvider).getHistory(),
-);
+final historyProvider = FutureProvider<List<HistoryEntry>>((ref) async {
+  if (ref.watch(_userIdProvider) == null) return const [];
+  return ref.read(libraryRepositoryProvider).getHistory();
+});
 
 /// "Baru diputar" di Beranda: 6 lagu unik terakhir dari riwayat.
 final recentlyPlayedProvider = Provider<AsyncValue<List<Track>>>((ref) {
@@ -164,16 +202,25 @@ class SearchNotifier extends Notifier<AsyncValue<SearchResult>?> {
   }
 }
 
-/// Disimpan lokal di HP (nanti pakai shared_preferences), tidak perlu backend.
+/// Disimpan lokal di HP, tidak perlu backend.
 final recentSearchesProvider = NotifierProvider<RecentSearchesNotifier, List<String>>(RecentSearchesNotifier.new);
 
 class RecentSearchesNotifier extends Notifier<List<String>> {
+  static const _key = 'recent_searches';
+
+  SharedPreferences get _prefs => ref.read(sharedPrefsProvider);
+
   @override
-  List<String> build() => ['Tulus', 'Lagu galau', 'Mahalini', 'Playlist kerja'];
+  List<String> build() => _prefs.getStringList(_key) ?? const [];
 
-  void add(String q) => state = [q, ...state.where((x) => x.toLowerCase() != q.toLowerCase())].take(10).toList();
+  void _save(List<String> list) {
+    state = list;
+    _prefs.setStringList(_key, list);
+  }
 
-  void remove(String q) => state = state.where((x) => x != q).toList();
+  void add(String q) => _save([q, ...state.where((x) => x.toLowerCase() != q.toLowerCase())].take(10).toList());
+
+  void remove(String q) => _save(state.where((x) => x != q).toList());
 }
 
 final lyricsProvider = FutureProvider.family<List<LyricLine>?, Track>(
@@ -195,9 +242,24 @@ class Settings {
 final settingsProvider = NotifierProvider<SettingsNotifier, Settings>(SettingsNotifier.new);
 
 class SettingsNotifier extends Notifier<Settings> {
-  @override
-  Settings build() => const Settings();
+  static const _qualityKey = 'audio_quality';
+  static const _autoplayKey = 'autoplay';
 
-  void setQuality(AudioQuality q) => state = state.copyWith(quality: q);
-  void setAutoplay(bool v) => state = state.copyWith(autoplay: v);
+  SharedPreferences get _prefs => ref.read(sharedPrefsProvider);
+
+  @override
+  Settings build() => Settings(
+        quality: AudioQuality.values.asNameMap()[_prefs.getString(_qualityKey)] ?? AudioQuality.normal,
+        autoplay: _prefs.getBool(_autoplayKey) ?? true,
+      );
+
+  void setQuality(AudioQuality q) {
+    state = state.copyWith(quality: q);
+    _prefs.setString(_qualityKey, q.name);
+  }
+
+  void setAutoplay(bool v) {
+    state = state.copyWith(autoplay: v);
+    _prefs.setBool(_autoplayKey, v);
+  }
 }

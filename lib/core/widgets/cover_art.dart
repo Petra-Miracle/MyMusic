@@ -66,9 +66,27 @@ class CoverArt extends StatelessWidget {
             ? [BoxShadow(color: colors.last.withValues(alpha: 0.35), blurRadius: 40, offset: const Offset(0, 16))]
             : null,
       ),
-      child: imageUrl == null
-          ? null
-          : Image.network(imageUrl!, fit: BoxFit.cover, errorBuilder: (_, _, _) => const SizedBox()),
+      child: imageUrl == null ? null : _CoverImage(url: imageUrl!, large: size > 160),
+    );
+  }
+}
+
+/// Thumbnail YouTube kecil (320×180) cukup untuk tile; cover besar memakai versi 1280×720
+/// bila ada, dan kembali ke versi kecil bila video lama tidak punya.
+class _CoverImage extends StatelessWidget {
+  const _CoverImage({required this.url, required this.large});
+
+  final String url;
+  final bool large;
+
+  @override
+  Widget build(BuildContext context) {
+    final small = Image.network(url, fit: BoxFit.cover, errorBuilder: (_, _, _) => const SizedBox());
+    if (!large || !url.contains('i.ytimg.com') || !url.endsWith('/mqdefault.jpg')) return small;
+    return Image.network(
+      url.replaceFirst('/mqdefault.jpg', '/hq720.jpg'),
+      fit: BoxFit.cover,
+      errorBuilder: (_, _, _) => small,
     );
   }
 }

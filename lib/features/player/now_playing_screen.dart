@@ -9,6 +9,7 @@ import '../../app/theme/app_colors.dart';
 import '../../app/theme/app_theme.dart';
 import '../../core/widgets/buttons.dart';
 import '../../core/widgets/cover_art.dart';
+import '../../core/widgets/feedback.dart';
 import '../../data/providers.dart';
 import '../sheets/track_sheets.dart';
 import 'player_controller.dart';
@@ -83,7 +84,11 @@ class NowPlayingScreen extends ConsumerWidget {
                 ),
                 IconButton(
                   tooltip: liked ? 'Hapus dari disukai' : 'Suka',
-                  onPressed: () => ref.read(likesProvider.notifier).toggle(track),
+                  onPressed: () async {
+                    if (!await ref.read(likesProvider.notifier).toggle(track) && context.mounted) {
+                      showToast(context, 'Gagal menyimpan, periksa koneksi', error: true);
+                    }
+                  },
                   icon: Icon(
                     liked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
                     size: 26,
